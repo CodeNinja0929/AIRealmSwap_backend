@@ -1,118 +1,134 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-import random
-from web3 import Web3
+const express = require('express');
+const bodyParser = require('body-parser');
+const cors = require('cors');
+const Web3 = require('web3');
+const { randomFloat } = require('random-float');
+require('dotenv').config();
 
-app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+const app = express();
+app.use(cors());
+app.use(bodyParser.json());
 
-# Initialize web3
-infura_url = 'https://mainnet.infura.io/v3/YOUR_INFURA_PROJECT_ID'  # Replace with your Infura Project ID
-web3 = Web3(Web3.HTTPProvider(infura_url))
+// Initialize web3
+const infuraUrl = `https://mainnet.infura.io/v3/${process.env.INFURA_PROJECT_ID}`; // Use your Infura Project ID
+const web3 = new Web3(new Web3.providers.HttpProvider(infuraUrl));
 
-# Uniswap V1 exchange contract ABI and address
-uniswap_v1_exchange_abi = [
-    {
-        "constant": True,
-        "inputs": [],
-        "name": "getReserves",
-        "outputs": [
-            {"name": "reserve0", "type": "uint112"},
-            {"name": "reserve1", "type": "uint112"},
-            {"name": "blockTimestampLast", "type": "uint32"}
-        ],
-        "payable": False,
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "constant": False,
-        "inputs": [
-            {"name": "min_tokens", "type": "uint256"},
-            {"name": "deadline", "type": "uint256"}
-        ],
-        "name": "ethToTokenSwapOutput",
-        "outputs": [],
-        "payable": True,
-        "stateMutability": "payable",
-        "type": "function"
-    }
-]
+// Uniswap V1 exchange contract ABI and address
+const uniswapV1ExchangeAbi = [
+  {
+    constant: true,
+    inputs: [],
+    name: 'getReserves',
+    outputs: [
+      { name: 'reserve0', type: 'uint112' },
+      { name: 'reserve1', type: 'uint112' },
+      { name: 'blockTimestampLast', type: 'uint32' },
+    ],
+    payable: false,
+    stateMutability: 'view',
+    type: 'function',
+  },
+  {
+    constant: false,
+    inputs: [
+      { name: 'min_tokens', type: 'uint256' },
+      { name: 'deadline', type: 'uint256' },
+    ],
+    name: 'ethToTokenSwapOutput',
+    outputs: [],
+    payable: true,
+    stateMutability: 'payable',
+    type: 'function',
+  },
+];
 
-# Replace with the actual contract address obtained from the factory contract
-uniswap_v1_exchange_address = '0x1F98431c8aD98523631AE4a59f267346ea31F984'  # Example exchange address
+// Replace with the actual contract address obtained from the factory contract
+const uniswapV1ExchangeAddress = '0x1F98431c8aD98523631AE4a59f267346ea31F984'; // Example exchange address
 
-# Create contract instance
-uniswap_v1_exchange = web3.eth.contract(address=uniswap_v1_exchange_address, abi=uniswap_v1_exchange_abi)
+// Create contract instance
+const uniswapV1Exchange = new web3.eth.Contract(uniswapV1ExchangeAbi, uniswapV1ExchangeAddress);
 
-# Endpoint to fetch reserves
-@app.route('/reserves', methods=['GET'])
-def get_reserves():
-    reserves = uniswap_v1_exchange.functions.getReserves().call()
-    return jsonify({
-        'tokenReserve': reserves[0],
-        'ethReserve': reserves[1]
-    })
+// Endpoint to fetch reserves
+app.get('/reserves', async (req, res) => {
+  try {
+    const reserves = await uniswapV1Exchange.methods.getReserves().call();
+    res.json({
+      tokenReserve: reserves[0],
+      ethReserve: reserves[1],
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
-# Endpoint to generate a random value
-@app.route('/api/value', methods=['GET'])
-def get_value():
-    value = round(random.uniform(0.343, 0.5334), 4)
-    return jsonify({'value': value})
+// Endpoint to generate a random value
+app.get('/api/value', (req, res) => {
+  const value = parseFloat(randomFloat(0.343, 0.5334).toFixed(4));
+  res.json({ value });
+});
 
-# Endpoint to calculate minimum output amount based on slippage
-@app.route('/calculate_min_amount_out', methods=['POST'])
-def calculate_min_amount_out():
-    data = request.get_json()
-    amount_in = int(data['amountIn'])
-    slippage = float(data['slippage'])
+// Endpoint to calculate minimum output amount based on slippage
+app.post('/calculate_min_amount_out', async (req, res) => {
+  try {
+    const { amountIn, slippage } = req.body;
 
-    reserves = uniswap_v1_exchange.functions.getReserves().call()
-    token_reserve = reserves[0]
-    eth_reserve = reserves[1]
+    const reserves = await uniswapV1Exchange.methods.getReserves().call();
+    const tokenReserve = reserves[0];
+    const ethReserve = reserves[1];
 
-    amount_out = get_output_amount(amount_in, eth_reserve, token_reserve)
-    slippage_amount = amount_out * (slippage / 100)
-    min_amount_out = amount_out - slippage_amount
+    const amountOut = getOutputAmount(amountIn, ethReserve, tokenReserve);
+    const slippageAmount = amountOut * (slippage / 100);
+    const minAmountOut = amountOut - slippageAmount;
 
-    return jsonify({
-        'minAmountOut': min_amount_out
-    })
+    res.json({
+      minAmountOut,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
-# Endpoint to perform the swap
-@app.route('/swap', methods=['POST'])
-def swap():
-    data = request.get_json()
-    amount_in = int(data['amountIn'])
-    min_amount_out = int(data['minAmountOut'])
-    user_address = data['userAddress']
-    private_key = data['privateKey']  # Private key of the user for signing the transaction
+// Endpoint to perform the swap
+app.post('/swap', async (req, res) => {
+  try {
+    const { amountIn, minAmountOut, userAddress, privateKey } = req.body;
 
-    nonce = web3.eth.getTransactionCount(user_address)
-    transaction = uniswap_v1_exchange.functions.ethToTokenSwapOutput(
-        min_amount_out,
-        web3.eth.getBlock('latest')['timestamp'] + 60
-    ).buildTransaction({
-        'chainId': 1,
-        'gas': 2000000,
-        'gasPrice': web3.toWei('50', 'gwei'),
-        'nonce': nonce,
-        'value': amount_in
-    })
+    const nonce = await web3.eth.getTransactionCount(userAddress);
+    const transaction = uniswapV1Exchange.methods.ethToTokenSwapOutput(
+      minAmountOut,
+      Math.floor(Date.now() / 1000) + 60
+    ).encodeABI();
 
-    signed_txn = web3.eth.account.signTransaction(transaction, private_key)
-    tx_hash = web3.eth.sendRawTransaction(signed_txn.rawTransaction)
+    const tx = {
+      from: userAddress,
+      to: uniswapV1ExchangeAddress,
+      gas: 2000000,
+      gasPrice: web3.utils.toWei('50', 'gwei'),
+      nonce: nonce,
+      value: amountIn,
+      data: transaction,
+    };
 
-    return jsonify({
-        'txHash': web3.toHex(tx_hash)
-    })
+    const signedTx = await web3.eth.accounts.signTransaction(tx, privateKey);
+    const txHash = await web3.eth.sendSignedTransaction(signedTx.rawTransaction);
 
-# Helper function to calculate output amount
-def get_output_amount(input_amount, input_reserve, output_reserve):
-    input_amount_with_fee = input_amount * 997
-    numerator = input_amount_with_fee * output_reserve
-    denominator = (input_reserve * 1000) + input_amount_with_fee
-    return numerator // denominator
+    res.json({
+      txHash: txHash.transactionHash,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+// Helper function to calculate output amount
+function getOutputAmount(inputAmount, inputReserve, outputReserve) {
+  const inputAmountWithFee = inputAmount * 997;
+  const numerator = inputAmountWithFee * outputReserve;
+  const denominator = inputReserve * 1000 + inputAmountWithFee;
+  return Math.floor(numerator / denominator);
+}
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
